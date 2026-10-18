@@ -1,73 +1,114 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np
+import joblib
+import os
+import warnings
+from sklearn.exceptions import InconsistentVersionWarning
+
+# Ignora avisos de versão do scikit-learn na hora de carregar o modelo
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 # Configuração da página
-st.set_page_config(page_title="Dashboard TDAH", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Triagem TDAH", page_icon="🧠", layout="wide")
 
-st.title("🧠 Dashboard de Predição de TDAH")
-st.markdown("""
-Este é o **MVP** do projeto. Faça o upload do arquivo CSV com as predições do modelo para visualizar os resultados.
-""")
+# Carregar modelo (com cache para não carregar toda hora)
+@st.cache_resource
+def carregar_modelo():
+    caminho = 'modelos/artefatos.joblib'
+    if os.path.exists(caminho):
+        return joblib.load(caminho)
+    return None
 
-# Componente de upload
-st.sidebar.header("1. Upload dos Dados")
-arquivo_carregado = st.sidebar.file_uploader("Escolha o arquivo CSV (ex: resultados_modelo.csv)", type="csv")
+artefatos = carregar_modelo()
 
-if arquivo_carregado is not None:
-    # Carregar os dados
-    df = pd.read_csv(arquivo_carregado)
-    
-    st.sidebar.success("Arquivo carregado com sucesso!")
-    
-    # Layout de colunas para os gráficos
-    col1, col2 = st.columns(2)
+if artefatos is None:
+    st.error("⚠️ Arquivo de modelo não encontrado! Certifique-se de que a pasta 'modelos' e o arquivo 'artefatos.joblib' estão na raiz do projeto no GitHub.")
+    st.stop()
+
+# Título
+st.title("🧠 Simulador de Triagem de TDAH")
+st.markdown("Preencha os dados clínicos do paciente abaixo para que a Inteligência Artificial calcule a probabilidade de TDAH.")
+
+st.divider()
+
+# Formulário de entrada de dados
+with st.form("form_paciente"):
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("📊 Resumo Geral")
-        total_pacientes = len(df)
-        total_positivos = df['Previsao_TDAH'].sum()
-        total_negativos = total_pacientes - total_positivos
-        
-        st.metric("Total de Pacientes", total_pacientes)
-        st.metric("Pacientes com TDAH (Previsto)", total_positivos)
-        st.metric("Pacientes Sem TDAH (Previsto)", total_negativos)
+        st.subheader("Dados Básicos")
+        age = st.number_input("Idade (Age)", min_value=5.0, max_value=30.0, value=10.0, step=1.0)
+        gender = st.selectbox("Gênero (Gender)", options=[0.0, 1.0], format_func=lambda x: "Feminino (0)" if x == 0.0 else "Masculino (1)")
+        handedness = st.selectbox("Mão Dominante (Handedness)", options=["RIGHT", "LEFT", "AMBIDEXTROUS", "0.5", "1.0", "-999"])
         
     with col2:
-        st.subheader("📈 Distribuição das Predições")
-        # Criando gráfico de pizza
-        fig, ax = plt.subplots(figsize=(6, 4))
-        labels = ['Sem TDAH', 'Com TDAH']
-        sizes = [total_negativos, total_positivos]
-        colors = ['#66b3ff', '#ff9999']
-        ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-        ax.axis('equal')
-        st.pyplot(fig)
+        st.subheader("Testes de QI")
+        iq_measure = st.selectbox("Medida de QI (IQ Measure)", options=[1.0, 2.0, 3.0, 4.0, 5.0, -999.0])
+        verbal_iq = st.number_input("QI Verbal (Verbal IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
+        performance_iq = st.number_input("QI de Execução (Performance IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
 
-    # Tabela de dados
-    st.subheader("📋 Tabela de Dados Detalhada")
-    st.markdown("Abaixo estão todos os dados do arquivo, incluindo a probabilidade calculada pelo modelo.")
-    
-    # Filtrando apenas as colunas mais importantes para não poluir a tela
-    colunas_exibir = ['Site', 'Age', 'Gender', 'Full4 IQ', 'Previsao_TDAH', 'Probabilidade']
-    # Verifica se as colunas existem antes de filtrar
-    colunas_exibir = [col for col in colunas_exibir if col in df.columns]
-    
-    # Exibindo a tabela com destaque para a coluna de probabilidade
-    st.dataframe(
-        df[colunas_exibir].style.highlight_max(axis=0, subset=['Probabilidade'], color='lightcoral'),
-        use_container_width=True
-    )
+    with col3:
+        st.subheader("Outros Dados")
+        full4_iq = st.number_input("QI Total 4 (Full4 IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
+        med_status = st.selectbox("Status de Medicação (Med Status)", options=["OFF", "ON", "PENDING", "-999"])
+        
+    # Botão de submissão
+    submitted = st.form_submit_button("🔍 Calcular Probabilidade de TDAH", use_container_width=True)
 
-    # Botão para baixar os dados
-    st.sidebar.header("2. Download")
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.sidebar.download_button(
-        label="Baixar Tabela de Resultados",
-        data=csv,
-        file_name='resultados_finais_adhd.csv',
-        mime='text/csv',
-    )
-else:
-    st.info("👈 Por favor, faça o upload do arquivo CSV na barra lateral para começar.")
+# Lógica de predição
+if submitted:
+    # Criar um DataFrame com os dados inseridos (os nomes devem bater com o treino)
+    dados_paciente = pd.DataFrame([{
+        'Site': 1.0, # O modelo exige a coluna Site, usamos 1.0 como padrão
+        'Gender': gender,
+        'Age': age,
+        'Handedness': handedness,
+        'IQ Measure': iq_measure,
+        'Verbal IQ': verbal_iq,
+        'Performance IQ': performance_iq,
+        'Full4 IQ': full4_iq,
+        'Med Status': med_status
+    }])
+
+    try:
+        # 1. Aplicar o MESMO pipeline de pré-processamento do treino
+        df = dados_paciente.copy()
+        
+        # Padronizar texto
+        for col in df.columns:
+            if col in artefatos['categorical_cols'] or df[col].dtype == 'object':
+                df[col] = df[col].astype(str).str.strip().str.upper()
+
+        # One-Hot Encoding
+        df_enc = pd.get_dummies(df, drop_first=True)
+        
+        # Alinhar colunas com o treino (preenche as que faltam com 0)
+        df_enc = df_enc.reindex(columns=artefatos['colunas_treino'], fill_value=0)
+
+        # Imputar valores ausentes e escalonar
+        X_imp = artefatos['imputer'].transform(df_enc)
+        X_scaled = artefatos['scaler'].transform(X_imp)
+
+        # 2. Fazer a predição usando o Random Forest
+        modelo = artefatos['modelo_rf']
+        predicao = modelo.predict(X_imp)[0]
+        probabilidade = modelo.predict_proba(X_imp)[0][1]
+
+        # 3. Mostrar o resultado na tela
+        st.divider()
+        st.subheader("Resultado da Análise")
+        
+        if predicao == 1:
+            st.error(f"### ⚠️ ALTO RISCO DE TDAH")
+            st.markdown(f"O modelo estimou uma probabilidade de **{probabilidade:.1%}** de o paciente ter TDAH.")
+        else:
+            st.success(f"### ✅ BAIXO RISCO DE TDAH")
+            st.markdown(f"O modelo estimou uma probabilidade de apenas **{probabilidade:.1%}** de o paciente ter TDAH.")
+            
+        # Mostrar barra de progresso visual
+        st.progress(float(probabilidade))
+        
+    except Exception as e:
+        st.error(f"Erro ao processar a predição: {e}")
+        st.write("Verifique se as colunas de entrada correspondem exatamente às colunas do treino original.")

@@ -6,13 +6,13 @@ import os
 import warnings
 from sklearn.exceptions import InconsistentVersionWarning
 
-# Ignora avisos chatos de versão do scikit-learn
+# Ignora avisos de versão do scikit-learn
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
-# Configuração da página (deixa o layout largo e bonito)
+# Configuração da página
 st.set_page_config(page_title="Triagem TDAH - IA", page_icon="🧠", layout="wide")
 
-# Estilo personalizado (CSS) para deixar os cards mais bonitos
+# CSS para deixar o botão e os textos mais bonitos
 st.markdown("""
     <style>
     .big-font { font-size:20px !important; font-weight: bold;}
@@ -33,13 +33,12 @@ def carregar_modelo():
 artefatos = carregar_modelo()
 
 if artefatos is None:
-    st.error("⚠️ Erro Crítico: Arquivo 'artefatos.joblib' não encontrado. Verifique a pasta 'modelos' no GitHub.")
+    st.error("⚠️ Erro Crítico: Arquivo 'artefatos.joblib' não encontrado. Verifique a pasta 'modelos' no repositório.")
     st.stop()
 
 # ==========================================
 # GERENCIAR HISTÓRICO (TABELA)
 # ==========================================
-# Guarda os dados na memória da sessão para a tabela
 if 'historico' not in st.session_state:
     st.session_state.historico = pd.DataFrame(columns=['Idade', 'Gênero', 'QI Verbal', 'Resultado', 'Probabilidade'])
 
@@ -49,7 +48,6 @@ if 'historico' not in st.session_state:
 st.title("🧠 Simulador de Triagem de TDAH")
 st.markdown("Preencha os dados clínicos do paciente abaixo. A Inteligência Artificial calculará o risco em tempo real.")
 
-# Cria o formulário
 with st.form("form_triagem"):
     st.subheader("1. Dados do Paciente")
     col1, col2, col3 = st.columns(3)
@@ -75,12 +73,11 @@ with st.form("form_triagem"):
 # LÓGICA DE PREDIÇÃO
 # ==========================================
 if submitted:
-    # Se o usuário digitou 0, substitui por NaN (para o imputer preencher com a mediana, igual no treino)
+    # Se o usuário digitou 0, transformamos em NaN para o imputer preencher
     v_iq = np.nan if verbal_iq == 0 else verbal_iq
     p_iq = np.nan if performance_iq == 0 else performance_iq
     f4_iq = np.nan if full4_iq == 0 else full4_iq
 
-    # Cria o "paciente" no formato do treino
     dados_paciente = pd.DataFrame([{
         'Site': 1.0,
         'Gender': gender,
@@ -94,7 +91,7 @@ if submitted:
     }])
 
     try:
-        # 1. Pré-processamento (Mesmo pipeline do treino)
+        # Pré-processamento
         df = dados_paciente.copy()
         
         for col in df.columns:
@@ -104,16 +101,15 @@ if submitted:
         df_enc = pd.get_dummies(df, drop_first=True)
         df_enc = df_enc.reindex(columns=artefatos['colunas_treino'], fill_value=0)
         
-        # Transformações
         X_imp = artefatos['imputer'].transform(df_enc)
         X_scaled = artefatos['scaler'].transform(X_imp)
 
-        # 2. Predição
+        # Predição
         modelo = artefatos['modelo_rf']
         predicao = modelo.predict(X_imp)[0]
         probabilidade = modelo.predict_proba(X_imp)[0][1]
 
-        # 3. Exibição do Resultado
+        # Exibição do Resultado
         st.divider()
         st.subheader("2. Resultado da Análise Clínica")
         
@@ -126,10 +122,10 @@ if submitted:
                 st.success("### ✅ BAIXO RISCO\n**Sugestão:** Manter acompanhamento de rotina.")
                 
         with res_col2:
-            st.markdown(f"<p class='big-font'>Probabilidade estimada pelo modelo: {probabilidade:.1%}</p>", unsafe_allow_html=True)
+            st.markdown(f"<p class='big-font'>Probabilidade estimada: {probabilidade:.1%}</p>", unsafe_allow_html=True)
             st.progress(float(probabilidade))
             
-        # 4. Salvar no Histórico
+        # Salvar no Histórico
         novo_registro = pd.DataFrame([{
             'Idade': f"{age:.1f} anos",
             'Gênero': "Masculino" if gender == 1.0 else "Feminino",
@@ -148,13 +144,12 @@ if submitted:
 st.divider()
 st.subheader("📋 Histórico de Pacientes Avaliados nesta Sessão")
 if len(st.session_state.historico) > 0:
-    # Colorir a tabela com base no resultado
     def color_resultado(val):
         color = '#ff4b4b' if val == 'Positivo' else '#09ab3b'
         return f'color: {color}; font-weight: bold'
     
     st.dataframe(
-        st.session_state.historico.style.applymap(color_resultado, subset=['Resultado']),
+        st.session_state.historico.style.map(color_resultado, subset=['Resultado']),
         use_container_width=True,
         hide_index=True
     )

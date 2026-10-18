@@ -6,13 +6,23 @@ import os
 import warnings
 from sklearn.exceptions import InconsistentVersionWarning
 
-# Ignora avisos de versão do scikit-learn na hora de carregar o modelo
+# Ignora avisos chatos de versão do scikit-learn
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
-# Configuração da página
-st.set_page_config(page_title="Triagem TDAH", page_icon="🧠", layout="wide")
+# Configuração da página (deixa o layout largo e bonito)
+st.set_page_config(page_title="Triagem TDAH - IA", page_icon="🧠", layout="wide")
 
-# Carregar modelo (com cache para não carregar toda hora)
+# Estilo personalizado (CSS) para deixar os cards mais bonitos
+st.markdown("""
+    <style>
+    .big-font { font-size:20px !important; font-weight: bold;}
+    .stButton>button { width: 100%; height: 50px; font-size: 18px; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# CARREGAR MODELO
+# ==========================================
 @st.cache_resource
 def carregar_modelo():
     caminho = 'modelos/artefatos.joblib'
@@ -23,92 +33,134 @@ def carregar_modelo():
 artefatos = carregar_modelo()
 
 if artefatos is None:
-    st.error("⚠️ Arquivo de modelo não encontrado! Certifique-se de que a pasta 'modelos' e o arquivo 'artefatos.joblib' estão na raiz do projeto no GitHub.")
+    st.error("⚠️ Erro Crítico: Arquivo 'artefatos.joblib' não encontrado. Verifique a pasta 'modelos' no GitHub.")
     st.stop()
 
-# Título
+# ==========================================
+# GERENCIAR HISTÓRICO (TABELA)
+# ==========================================
+# Guarda os dados na memória da sessão para a tabela
+if 'historico' not in st.session_state:
+    st.session_state.historico = pd.DataFrame(columns=['Idade', 'Gênero', 'QI Verbal', 'Resultado', 'Probabilidade'])
+
+# ==========================================
+# INTERFACE PRINCIPAL
+# ==========================================
 st.title("🧠 Simulador de Triagem de TDAH")
-st.markdown("Preencha os dados clínicos do paciente abaixo para que a Inteligência Artificial calcule a probabilidade de TDAH.")
+st.markdown("Preencha os dados clínicos do paciente abaixo. A Inteligência Artificial calculará o risco em tempo real.")
 
-st.divider()
-
-# Formulário de entrada de dados
-with st.form("form_paciente"):
+# Cria o formulário
+with st.form("form_triagem"):
+    st.subheader("1. Dados do Paciente")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.subheader("Dados Básicos")
-        age = st.number_input("Idade (Age)", min_value=5.0, max_value=30.0, value=10.0, step=1.0)
-        gender = st.selectbox("Gênero (Gender)", options=[0.0, 1.0], format_func=lambda x: "Feminino (0)" if x == 0.0 else "Masculino (1)")
-        handedness = st.selectbox("Mão Dominante (Handedness)", options=["RIGHT", "LEFT", "AMBIDEXTROUS", "0.5", "1.0", "-999"])
+        age = st.number_input("Idade (Anos)", min_value=5.0, max_value=99.0, value=10.0, step=1.0)
+        gender = st.selectbox("Gênero", options=[1.0, 0.0], format_func=lambda x: "Masculino (1)" if x == 1.0 else "Feminino (0)")
+        handedness = st.selectbox("Mão Dominante", options=["RIGHT", "LEFT", "AMBIDEXTROUS"])
         
     with col2:
-        st.subheader("Testes de QI")
-        iq_measure = st.selectbox("Medida de QI (IQ Measure)", options=[1.0, 2.0, 3.0, 4.0, 5.0, -999.0])
-        verbal_iq = st.number_input("QI Verbal (Verbal IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
-        performance_iq = st.number_input("QI de Execução (Performance IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
+        iq_measure = st.selectbox("Medida de QI", options=[1.0, 2.0, 3.0, 4.0, 5.0])
+        verbal_iq = st.number_input("QI Verbal (Deixe 0 se não avaliado)", min_value=0.0, max_value=160.0, value=100.0, step=1.0)
+        performance_iq = st.number_input("QI de Execução (Deixe 0 se não avaliado)", min_value=0.0, max_value=160.0, value=100.0, step=1.0)
 
     with col3:
-        st.subheader("Outros Dados")
-        full4_iq = st.number_input("QI Total 4 (Full4 IQ)", min_value=-999.0, max_value=160.0, value=-999.0, step=1.0)
-        med_status = st.selectbox("Status de Medicação (Med Status)", options=["OFF", "ON", "PENDING", "-999"])
+        full4_iq = st.number_input("QI Total 4 (Deixe 0 se não avaliado)", min_value=0.0, max_value=160.0, value=100.0, step=1.0)
+        med_status = st.selectbox("Status de Medicação", options=["OFF", "ON", "PENDING"])
         
-    # Botão de submissão
-    submitted = st.form_submit_button("🔍 Calcular Probabilidade de TDAH", use_container_width=True)
+    st.divider()
+    submitted = st.form_submit_button("🔍 Calcular Probabilidade de TDAH")
 
-# Lógica de predição
+# ==========================================
+# LÓGICA DE PREDIÇÃO
+# ==========================================
 if submitted:
-    # Criar um DataFrame com os dados inseridos (os nomes devem bater com o treino)
+    # Se o usuário digitou 0, substitui por NaN (para o imputer preencher com a mediana, igual no treino)
+    v_iq = np.nan if verbal_iq == 0 else verbal_iq
+    p_iq = np.nan if performance_iq == 0 else performance_iq
+    f4_iq = np.nan if full4_iq == 0 else full4_iq
+
+    # Cria o "paciente" no formato do treino
     dados_paciente = pd.DataFrame([{
-        'Site': 1.0, # O modelo exige a coluna Site, usamos 1.0 como padrão
+        'Site': 1.0,
         'Gender': gender,
         'Age': age,
         'Handedness': handedness,
         'IQ Measure': iq_measure,
-        'Verbal IQ': verbal_iq,
-        'Performance IQ': performance_iq,
-        'Full4 IQ': full4_iq,
+        'Verbal IQ': v_iq,
+        'Performance IQ': p_iq,
+        'Full4 IQ': f4_iq,
         'Med Status': med_status
     }])
 
     try:
-        # 1. Aplicar o MESMO pipeline de pré-processamento do treino
+        # 1. Pré-processamento (Mesmo pipeline do treino)
         df = dados_paciente.copy()
         
-        # Padronizar texto
         for col in df.columns:
             if col in artefatos['categorical_cols'] or df[col].dtype == 'object':
                 df[col] = df[col].astype(str).str.strip().str.upper()
 
-        # One-Hot Encoding
         df_enc = pd.get_dummies(df, drop_first=True)
-        
-        # Alinhar colunas com o treino (preenche as que faltam com 0)
         df_enc = df_enc.reindex(columns=artefatos['colunas_treino'], fill_value=0)
-
-        # Imputar valores ausentes e escalonar
+        
+        # Transformações
         X_imp = artefatos['imputer'].transform(df_enc)
         X_scaled = artefatos['scaler'].transform(X_imp)
 
-        # 2. Fazer a predição usando o Random Forest
+        # 2. Predição
         modelo = artefatos['modelo_rf']
         predicao = modelo.predict(X_imp)[0]
         probabilidade = modelo.predict_proba(X_imp)[0][1]
 
-        # 3. Mostrar o resultado na tela
+        # 3. Exibição do Resultado
         st.divider()
-        st.subheader("Resultado da Análise")
+        st.subheader("2. Resultado da Análise Clínica")
         
-        if predicao == 1:
-            st.error(f"### ⚠️ ALTO RISCO DE TDAH")
-            st.markdown(f"O modelo estimou uma probabilidade de **{probabilidade:.1%}** de o paciente ter TDAH.")
-        else:
-            st.success(f"### ✅ BAIXO RISCO DE TDAH")
-            st.markdown(f"O modelo estimou uma probabilidade de apenas **{probabilidade:.1%}** de o paciente ter TDAH.")
+        res_col1, res_col2 = st.columns([1, 2])
+        
+        with res_col1:
+            if predicao == 1:
+                st.error("### ⚠️ ALTO RISCO\n**Sugestão:** Encaminhamento para avaliação especializada.")
+            else:
+                st.success("### ✅ BAIXO RISCO\n**Sugestão:** Manter acompanhamento de rotina.")
+                
+        with res_col2:
+            st.markdown(f"<p class='big-font'>Probabilidade estimada pelo modelo: {probabilidade:.1%}</p>", unsafe_allow_html=True)
+            st.progress(float(probabilidade))
             
-        # Mostrar barra de progresso visual
-        st.progress(float(probabilidade))
-        
+        # 4. Salvar no Histórico
+        novo_registro = pd.DataFrame([{
+            'Idade': f"{age:.1f} anos",
+            'Gênero': "Masculino" if gender == 1.0 else "Feminino",
+            'QI Verbal': verbal_iq if verbal_iq > 0 else "Não avaliado",
+            'Resultado': "Positivo" if predicao == 1 else "Negativo",
+            'Probabilidade': f"{probabilidade:.1%}"
+        }])
+        st.session_state.historico = pd.concat([st.session_state.historico, novo_registro], ignore_index=True)
+
     except Exception as e:
         st.error(f"Erro ao processar a predição: {e}")
-        st.write("Verifique se as colunas de entrada correspondem exatamente às colunas do treino original.")
+
+# ==========================================
+# EXIBIR TABELA DE HISTÓRICO
+# ==========================================
+st.divider()
+st.subheader("📋 Histórico de Pacientes Avaliados nesta Sessão")
+if len(st.session_state.historico) > 0:
+    # Colorir a tabela com base no resultado
+    def color_resultado(val):
+        color = '#ff4b4b' if val == 'Positivo' else '#09ab3b'
+        return f'color: {color}; font-weight: bold'
+    
+    st.dataframe(
+        st.session_state.historico.style.applymap(color_resultado, subset=['Resultado']),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    if st.button("🗑️ Limpar Histórico"):
+        st.session_state.historico = pd.DataFrame(columns=st.session_state.historico.columns)
+        st.rerun()
+else:
+    st.info("Nenhum paciente avaliado ainda. Preencha o formulário acima.")
